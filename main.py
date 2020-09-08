@@ -18,7 +18,7 @@ import os
 from dataset import CUBDataset,VOCPartDataset
 import argparse
 import numpy as np
-from vgg16 import VGG_interpretable,VGG_gradcam, VGG_interpretable_atten,VGG_interpretable_gradcam, VGGNet,VGG_interpretable_gradcam2
+from vgg16 import VGG_interpretable,VGG_gradcam, VGG_atten,VGG_interpretable_gradcam, VGGNet
 from resnet import Resnet,Resnet_interpretable,Resnet_interpretable_gradcam
 from mobilenet import MobileNet,Mobile_interpretable_gradcam
 from alexnet import Alexnet,Alexnet_interpretable_gradcam,Alexnet_interpretable
@@ -27,10 +27,10 @@ import math
 from utils import Cutout
 
 '''定义超参数'''
-batch_size = 32 
-batch_size_t = 32       # 批的大小
+batch_size = 64 
+batch_size_t = 64       # 批的大小
 learning_rate = 1e-2    # 学习率
-learning_rate_basemodel = 1e-4
+learning_rate_basemodel = 1e-2
 num_epoches = 90        # 遍历训练集的次数
 #explanation = False
 model_half = True
@@ -101,12 +101,12 @@ def grad_cam(grad_block,fmap_block):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='CapsNet')
-    parser.add_argument('--dataset', type=str, default='VOCPart', metavar='N',
+    parser.add_argument('--dataset', type=str, default='CIFAR10', metavar='N',
                         help='name of dataset: CIFAR10 or CUB or VOCPart')
     parser.add_argument('--np_save', type=str, default='F', metavar='N',
                         help='name of T or F')
-    parser.add_argument('--model_type', type=str, default='norm', metavar='N',
-                        help='norm, ex or ex_atten or ex_gradcam')
+    parser.add_argument('--model_type', type=str, default='atten', metavar='N',
+                        help='norm, ex or atten or ex_gradcam')
     parser.add_argument('--model', type=str, default='vgg', metavar='N',
                         help='vgg or resnet or mobilenet or alexnet')
     parser.add_argument('--model_init', action='store_true', default=False, help='use Xavier Initialization')
@@ -154,44 +154,38 @@ if __name__ == '__main__':
     
     '''创建model实例对象，并检测是否支持使用GPU'''
     if args.model == 'vgg':
-        if args.model_type == 'ex_atten':
-            model = VGG_interpretable_atten(num_classes=num_classe)
+        if args.model_type == 'atten':
+            model = VGG_atten(num_classes=num_classe)
         elif args.model_type == 'ex':
             model = VGG_interpretable(num_classes=num_classe)
         elif args.model_type == 'gradcam':
             model = VGG_gradcam(num_classes=num_classe)
         elif args.model_type == 'ex_gradcam':
             model = VGG_interpretable_gradcam(num_classes=num_classe)
-        elif args.model_type == 'ex_gradcam2':
-            model = VGG_interpretable_gradcam2(num_classes=num_classe)
         else:
             model = VGGNet(num_classes=num_classe)
             #model = VGG_gradcam(num_classes=num_classe)
     elif args.model == 'resnet':
-        if args.model_type == 'ex_atten':
-            model = VGG_interpretable_atten(num_classes=num_classe)
+        if args.model_type == 'atten':
+            model = VGG_atten(num_classes=num_classe)
         elif args.model_type == 'ex':
             model = Resnet_interpretable(num_classes=num_classe)
         elif args.model_type == 'ex_gradcam':
             model = Resnet_interpretable_gradcam(num_classes=num_classe)
-        elif args.model_type == 'ex_gradcam2':
-            model = VGG_interpretable_gradcam2(num_classes=num_classe)
         else:
             model = Resnet(num_classes=num_classe)
     elif args.model == 'mobilenet':
-        if args.model_type == 'ex_atten':
-            model = VGG_interpretable_atten(num_classes=num_classe)
+        if args.model_type == 'atten':
+            model = VGG_atten(num_classes=num_classe)
         elif args.model_type == 'ex':
             model = VGG_interpretable(num_classes=num_classe)
         elif args.model_type == 'ex_gradcam':
             model = Mobile_interpretable_gradcam(num_classes=num_classe)
-        elif args.model_type == 'ex_gradcam2':
-            model = VGG_interpretable_gradcam2(num_classes=num_classe)
         else:
             model = MobileNet(num_classes=num_classe)
     elif args.model == 'alexnet':
-        if args.model_type == 'ex_atten':
-            model = VGG_interpretable_atten(num_classes=num_classe)
+        if args.model_type == 'atten':
+            model = VGG_atten(num_classes=num_classe)
         elif args.model_type == 'ex':
             model = Alexnet_interpretable(num_classes=num_classe)
         elif args.model_type == 'ex_gradcam':
@@ -278,11 +272,11 @@ if __name__ == '__main__':
                     out, x1, loss_1,x2,loss_2= model(img)
                     loss = criterion(out, targets)
                     loss = loss + lambda_ * (loss_1.sum() + loss_2.sum())
-                elif args.model_type == 'ex_atten':
-                    att_outputs,out, x1, loss_1= model(img)
+                elif args.model_type == 'atten':
+                    att_outputs,out= model(img)
                     loss = criterion(out, targets)
                     att_loss = criterion(att_outputs, targets)
-                    loss = loss + att_loss +lambda_ * loss_1.sum()
+                    loss = loss + att_loss
                 elif args.model_type == 'gradcam':
                     grad_block = list()
                     fmap_block = list()
@@ -333,33 +327,9 @@ if __name__ == '__main__':
                     loss = criterion(out, targets)
                     #loss = (1-(1/(epoch+1))) * loss + (1/(epoch+1)) * att_loss + (1-(1/(epoch+1))) * lambda_ * loss_1.sum()
                     loss = 0.4 * loss + 0.6 * att_loss + lambda_ * loss_1.sum()
-                elif args.model_type == 'ex_gradcam2':
-                    grad_block = list()
-                    fmap_block = list()
-                    handle_feat = model.avgpool.register_forward_hook(farward_hook)
-                    handle_grad = model.avgpool.register_backward_hook(backward_hook)
-                    out,_,_,_,_ = model(img,img)
-                    optimizer.zero_grad()
-                    class_loss = 0.0
-                    for i in range(len(out)):
-                        idx = np.argmax(out[i].cpu().data.numpy())
-                        class_loss += out[i,idx]
-                    class_loss = class_loss/len(out)
-                    class_loss.backward(retain_graph=True)
-                    handle_feat.remove()
-                    handle_grad.remove()
-                    atten = grad_cam(grad_block,fmap_block)
-                    att_loss = criterion(out, targets)
-                    out, x1, x2, loss_1, loss_2= model(img,cam=False,att=atten)
-                    loss = criterion(out, targets)
-                    #loss = (1-(1/(epoch+1))) * loss + (1/(epoch+1)) * att_loss + (1-(1/(epoch+1))) * lambda_ * loss_1.sum()
-                    loss = 0.4 * loss + 0.6 * att_loss + lambda_ * (loss_1.sum() + loss_2.sum())
                 else:
                     out = model(img)
                     loss = criterion(out, targets)
-                if args.model_type != 'norm' and args.model_type != 'gradcam':
-                    running_loss_1 += loss_1.sum().item() * targets.size(0)
-                    running_loss_2 += loss_2.sum().item() * targets.size(0)
                 running_loss += loss.item() * targets.size(0)
                 prec1, prec5 = accuracy(out.data, targets.data, topk=(1, 5))
                 #_, pred = torch.max(out, 1)     # 预测最大值所在的位置标签
@@ -371,30 +341,14 @@ if __name__ == '__main__':
                 # 向后传播
                 optimizer.zero_grad()
                 
-                if args.model_type != 'norm' and args.model_type != 'gradcam':
-                    #compute and add gradient
-                    x1.retain_grad()
-                    x2.retain_grad()
-            
-                    loss_1.backward(Variable(torch.ones(*loss_1.size()).cuda(0)), retain_graph=True)
-                    x1_grad = x1.grad.clone()
-                    optimizer.zero_grad()
-                    
-                    loss_2.backward(Variable(torch.ones(*loss_2.size()).cuda(0)), retain_graph=True)
-                    x2_grad = x2.grad.clone()
-                    optimizer.zero_grad()
                 
                 loss.backward()
-                if args.model_type != 'norm' and args.model_type != 'gradcam':
-                    x1.grad += lambda_ * x1_grad
-                    x2.grad += lambda_ * x2_grad
+
                 optimizer.step()
                 if args.model_type == 'norm' or args.model_type == 'gradcam':
                     pbar.set_postfix(loss=loss.data.cpu().numpy(), acc_prec1=prec1.cpu().numpy(),acc_prec5=prec5.cpu().numpy())
-                elif args.model_type == 'ex':
-                    pbar.set_postfix(loss=loss.data.cpu().numpy(),loss_1=loss_1.sum().data.cpu().numpy(), acc_prec1=prec1.cpu().numpy(),acc_prec5=prec5.cpu().numpy())
-                else:
-                    pbar.set_postfix(loss=loss.data.cpu().numpy(),att_loss=att_loss.data.cpu().numpy(),loss_1=loss_1.sum().data.cpu().numpy(), acc_prec1=prec1.cpu().numpy(),acc_prec5=prec5.cpu().numpy())
+                elif args.model_type == 'atten':
+                    pbar.set_postfix(loss=loss.data.cpu().numpy(),att_loss=att_loss.data.cpu().numpy(), acc_prec1=prec1.cpu().numpy(),acc_prec5=prec5.cpu().numpy())
                 pbar.update()
                 #break
         if args.model_type != 'norm' and args.model_type != 'gradcam':
@@ -428,10 +382,10 @@ if __name__ == '__main__':
             #else:
             img = Variable(img)
             targets = Variable(targets)
-            if args.model_type == 'ex_atten':
-                _, out, x1, loss_1= model(img)
+            if args.model_type == 'atten':
+                _, out= model(img)
                 loss = criterion(out, targets)
-                loss = loss + lambda_ * loss_1.sum()
+                loss = loss
             elif args.model_type == 'ex':
                 out, x1, loss_1,x2,loss_2= model(img)
                 loss = criterion(out, targets)
