@@ -278,7 +278,8 @@ class VGG_interpretable_atten(nn.Module):
         self.att_gap = nn.AdaptiveAvgPool2d((1, 1))
         self.sigmoid = nn.Sigmoid()
         self.relu = nn.ReLU(inplace=True)
-        
+        self.maxpool = nn.AdaptiveMaxPool2d(1)
+        self.fc = nn.Linear(512, num_classes)
         self.classifier = nn.Sequential(*list(models.vgg16(num_classes=self.num_classes).classifier.children()))
         # create templates for all filters
         self.out_size = 7
@@ -339,10 +340,12 @@ class VGG_interpretable_atten(nn.Module):
         
         rx = x * self.att
         x1 = self.get_masked_output(rx)
-        x = rx + x1
+        x = x1+rx
         self.featuremap1 = x1.detach()
+        x = self.maxpool(x)
         x = x.view(x.size(0), -1)
-        x = self.classifier(x.half())
+        x = self.fc(x.half())
+        #x = self.classifier(x.half())
 
         # compute local loss:
         loss_1 = self.compute_local_loss(x1)
@@ -368,6 +371,8 @@ class VGG_atten(nn.Module):
         self.att_gap = nn.AdaptiveAvgPool2d((1, 1))
         self.sigmoid = nn.Sigmoid()
         self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.AdaptiveMaxPool2d(1)
+        self.fc = nn.Linear(512, num_classes)
         
         self.classifier = nn.Sequential(*list(models.vgg16(num_classes=self.num_classes).classifier.children()))
         # create templates for all filters
@@ -428,8 +433,10 @@ class VGG_atten(nn.Module):
         ax = ax.view(ax.size(0), -1)
         
         rx = x * self.att
+        rx = self.maxpool(rx)
         x = rx.view(rx.size(0), -1)
-        x = self.classifier(x)
+        x = self.fc(x)
+        #x = self.classifier(x)
 
         return ax, x
 
@@ -597,7 +604,10 @@ class VGGNet(nn.Module):
         net = models.vgg16(pretrained=True)   #从预训练模型加载VGG16网络参数
         net.classifier = nn.Sequential()	#将分类层置空，下面将改变我们的分类层
         #self.features = net		#保留VGG16的特征层
-        self.base_model = net
+        #self.base_model = net
+        self.base_model = nn.Sequential(*list(models.vgg16(pretrained=True).features.children()))
+        self.maxpool = nn.AdaptiveMaxPool2d(1)
+        self.fc = nn.Linear(512, num_classes)
         self.classifier = nn.Sequential(    #定义自己的分类层
                 nn.Linear(512 * 7 * 7, 512),  #512 * 7 * 7不能改变 ，由VGG16网络决定的，第二个参数为神经元个数可以微调
                 nn.ReLU(True),
@@ -610,7 +620,9 @@ class VGGNet(nn.Module):
 
     def forward(self, x):
         x = self.base_model(x)
+        x = self.maxpool(x)
         #self.featuremap1 = x
         x = x.view(x.size(0), -1)
-        x = self.classifier(x)
+        #x = self.classifier(x)
+        x = self.fc(x)
         return x
