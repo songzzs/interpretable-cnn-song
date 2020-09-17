@@ -3,7 +3,7 @@
 Created on Mon Jun 22 09:43:06 2020
 
 @author: Administrator
-`"""
+G`"""
 
 import torch
 import torch.nn as nn
@@ -25,7 +25,7 @@ from alexnet import Alexnet,Alexnet_interpretable_gradcam,Alexnet_interpretable
 from eval import accuracy, Logger, savefig
 import math
 from utils import Cutout
-
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 '''定义超参数'''
 batch_size = 32 
 batch_size_t = 32       # 批的大小
@@ -34,7 +34,7 @@ learning_rate_basemodel = 1e-2
 num_epoches = 90        # 遍历训练集的次数
 #explanation = False
 model_half = True
-lambda_ = 0.9
+lambda_ = 0.01
 pretrained = False
 
 
@@ -105,8 +105,8 @@ if __name__ == '__main__':
                         help='name of dataset: CIFAR10 or CUB or VOCPart')
     parser.add_argument('--np_save', type=str, default='F', metavar='N',
                         help='name of T or F')
-    parser.add_argument('--model_type', type=str, default='ex_atten', metavar='N',
-                        help='norm, atten, ex or ex_atten or ex_gradcam')
+    parser.add_argument('--model_type', type=str, default='ex_gradcam5', metavar='N',
+                        help='norm, atten, ex or ex_atten or ex_gradcam or ex_gradcam5')
     parser.add_argument('--model', type=str, default='vgg', metavar='N',
                         help='vgg or resnet or mobilenet or alexnet')
     parser.add_argument('--model_init', action='store_true', default=False, help='use Xavier Initialization')
@@ -163,6 +163,8 @@ if __name__ == '__main__':
         elif args.model_type == 'gradcam':
             model = VGG_gradcam(num_classes=num_classe)
         elif args.model_type == 'ex_gradcam':
+            model = VGG_interpretable_gradcam(num_classes=num_classe)
+        elif args.model_type == 'ex_gradcam5':
             model = VGG_interpretable_gradcam(num_classes=num_classe)
         elif args.model_type == 'ex_gradcam2':
             model = VGG_interpretable_gradcam2(num_classes=num_classe)
@@ -277,9 +279,9 @@ if __name__ == '__main__':
                 targets = Variable(targets.squeeze())
                 # 向前传播
                 if args.model_type == 'ex':
-                    out, x1, loss_1,x2,loss_2= model(img)
+                    out, x1, loss_1= model(img)
                     loss = criterion(out, targets)
-                    loss = loss + lambda_ * (loss_1.sum() + loss_2.sum())
+                    loss = loss + lambda_ * (loss_1.sum())
                 elif args.model_type == 'atten':
                     att_outputs,out= model(img)
                     loss = criterion(out, targets)
@@ -289,7 +291,7 @@ if __name__ == '__main__':
                     att_outputs,out, x1, loss_1= model(img)
                     loss = criterion(out, targets)
                     att_loss = criterion(att_outputs, targets)
-                    loss = loss + att_loss +lambda_ * loss_1.sum()
+                    loss = loss + att_loss #+lambda_ * loss_1.sum()
                 elif args.model_type == 'gradcam':
                     grad_block = list()
                     fmap_block = list()
@@ -338,8 +340,36 @@ if __name__ == '__main__':
                     att_loss = criterion(out, targets)
                     out, x1, loss_1= model(img,cam=False,att=atten)
                     loss = criterion(out, targets)
+                    loss = (1-(1/(epoch+1))) * loss + (1/(epoch+1)) * att_loss + (1-(1/(epoch+1))) * lambda_ * loss_1.sum()
+                    #loss = 0.6 * loss + 0.4 * att_loss + lambda_ * loss_1.sum()
+                elif args.model_type == 'gradcam5':
+                    grad_block = list()
+                    fmap_block = list()
+                    if args.model == 'vgg':
+                        handle_feat = model.avgpool.register_forward_hook(farward_hook)
+                        handle_grad = model.avgpool.register_backward_hook(backward_hook)
+                    elif args.model != 'vgg':
+                        handle_feat = model.base_model.register_forward_hook(farward_hook)
+                        handle_grad = model.base_model.register_backward_hook(backward_hook)
+                    out= model(img,img)
+                    optimizer.zero_grad()
+                    class_loss = 0.0
+                    for i in range(len(out)):
+                        #idx = np.argmax(out[i].cpu().data.numpy())
+                        idex = np.argsort(out[i].cpu().data.numpy())
+                        for k in range(5):
+                            class_loss += out[i,idex[k]]
+                    class_loss = class_loss/len(out)
+                    class_loss.backward(retain_graph=True)
+                    handle_feat.remove()
+                    handle_grad.remove()
+                    atten = grad_cam(grad_block,fmap_block)
+                    att_loss = criterion(out, targets)
+                    out= model(img,cam=False,att=atten)
+                    loss = criterion(out, targets)
                     #loss = (1-(1/(epoch+1))) * loss + (1/(epoch+1)) * att_loss + (1-(1/(epoch+1))) * lambda_ * loss_1.sum()
-                    loss = 0.6 * loss + 0.4 * att_loss + lambda_ * loss_1.sum()
+                    loss = (1-(1/(epoch+1))) * loss + 0.5*(1/(epoch+1)) * att_loss
+
                 elif args.model_type == 'ex_gradcam2':
                     grad_block = list()
                     fmap_block = list()
@@ -393,7 +423,7 @@ if __name__ == '__main__':
                 
                 loss.backward()
                 if args.model_type != 'norm' and args.model_type != 'gradcam'and args.model_type != 'atten':
-                    x1.grad += lambda_ * x1_grad
+                    x1.grad = lambda_ * x1.grad
                     #x2.grad += lambda_ * x2_grad
                 optimizer.step()
                 if args.model_type == 'norm' or args.model_type == 'gradcam'or args.model_type == 'atten':
@@ -440,9 +470,9 @@ if __name__ == '__main__':
                 loss = criterion(out, targets)
                 loss = loss + lambda_ * loss_1.sum()
             elif args.model_type == 'ex':
-                out, x1, loss_1,x2,loss_2= model(img)
+                out, x1, loss_1= model(img)
                 loss = criterion(out, targets)
-                loss = loss + lambda_ * loss_1.sum()
+                loss = loss + lambda_ * (loss_1.sum())
             elif args.model_type == 'atten':
                 _,out= model(img)
                 loss = criterion(out, targets)
@@ -472,6 +502,29 @@ if __name__ == '__main__':
                 loss = criterion(out, targets)
                 #loss = loss + lambda_ * loss_1.sum()
                 loss = (1-(1/(epoch+1))) * loss + (1-(1/(epoch+1))) * lambda_ * loss_1.sum()
+            elif args.model_type == 'gradcam5':
+                grad_block = list()
+                fmap_block = list()
+                handle_feat = model.avgpool.register_forward_hook(farward_hook)
+                handle_grad = model.avgpool.register_backward_hook(backward_hook)
+                out = model(img,img)
+                model.zero_grad()
+                class_loss = 0.0
+                for i in range(len(out)):
+                    #idx = np.argmax(out[i].cpu().data.numpy())
+                    idex = np.argsort(out[i].cpu().data.numpy())
+                    for k in range(5):
+                        class_loss += out[i,idex[k]]
+                class_loss = class_loss/len(out)
+                #class_loss.requires_grad = True
+                class_loss.backward()
+                handle_feat.remove()
+                handle_grad.remove()
+                atten = grad_cam(grad_block,fmap_block)
+                out = model(img,cam=False,att=atten)
+                loss = criterion(out, targets)
+                #loss = loss + lambda_ * loss_1.sum()
+                loss = loss
             elif args.model_type == 'gradcam':
                 grad_block = list()
                 fmap_block = list()

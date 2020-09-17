@@ -112,7 +112,9 @@ class VGG_interpretable_gradcam(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
         self.sigmoid = nn.Sigmoid()
         self.relu = nn.ReLU(inplace=True)
-        
+        self.maxpool = nn.AdaptiveMaxPool2d(1)
+        self.norm = nn.BatchNorm2d(512)
+        self.fc = nn.Linear(512, num_classes)
         self.classifier = nn.Sequential(*list(models.vgg16(num_classes=self.num_classes).classifier.children()))
         # create templates for all filters
         self.out_size = 7
@@ -175,10 +177,12 @@ class VGG_interpretable_gradcam(nn.Module):
             rx = x * att
             x1 = self.get_masked_output(rx)
             self.featuremap1 = x1.detach()
-            x = rx + x1
-            self.featuremap2 = x.detach()
+            x = x1
+            x = self.maxpool(x)
+            #self.featuremap2 = x.detach()
             x = x.view(x.size(0), -1)
-            x = self.classifier(x.half())
+            x = self.fc(x.half())
+            #x = self.classifier(x.half())
     
             # compute local loss:
             loss_1 = self.compute_local_loss(x1)
@@ -276,9 +280,11 @@ class VGG_interpretable_atten(nn.Module):
                                bias=False)
         self.bn_att3 = nn.BatchNorm2d(1)
         self.att_gap = nn.AdaptiveAvgPool2d((1, 1))
+        self.laynorm = nn.LayerNorm(normalized_shape=[1,7,7], eps=0, elementwise_affine=False)
         self.sigmoid = nn.Sigmoid()
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.AdaptiveMaxPool2d(1)
+        self.norm = nn.BatchNorm2d(512)
         self.fc = nn.Linear(512, num_classes)
         self.classifier = nn.Sequential(*list(models.vgg16(num_classes=self.num_classes).classifier.children()))
         # create templates for all filters
@@ -333,15 +339,18 @@ class VGG_interpretable_atten(nn.Module):
         x = self.avgpool(x)
         
         ax = self.relu(self.bn_att2(self.att_conv(x)))
-        self.att = self.sigmoid(self.bn_att3(self.att_conv3(ax)))
+        ax1 = self.bn_att3(self.att_conv3(ax))
+        ax2 = self.laynorm(ax1)
+        self.att = self.sigmoid(ax2)
         ax = self.att_conv2(ax)
         ax = self.att_gap(ax)
         ax = ax.view(ax.size(0), -1)
         
         rx = x * self.att
         x1 = self.get_masked_output(rx)
-        x = x1+rx
-        self.featuremap1 = x1.detach()
+        #x1 = self.norm(x1.half())
+        x = x1
+        self.featuremap1 = x.detach()
         x = self.maxpool(x)
         x = x.view(x.size(0), -1)
         x = self.fc(x.half())
@@ -351,7 +360,7 @@ class VGG_interpretable_atten(nn.Module):
         loss_1 = self.compute_local_loss(x1)
         #loss_2 = self.compute_local_loss(x2)
 
-        return ax, x, x1, loss_1
+        return ax, x, rx, loss_1
     
 class VGG_atten(nn.Module):
     def __init__(self, num_classes=10):
@@ -369,6 +378,7 @@ class VGG_atten(nn.Module):
                                bias=False)
         self.bn_att3 = nn.BatchNorm2d(1)
         self.att_gap = nn.AdaptiveAvgPool2d((1, 1))
+        self.laynorm = nn.LayerNorm(normalized_shape=[1,7,7], eps=0, elementwise_affine=False)
         self.sigmoid = nn.Sigmoid()
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.AdaptiveMaxPool2d(1)
@@ -427,7 +437,9 @@ class VGG_atten(nn.Module):
         x = self.avgpool(x)
         
         ax = self.relu(self.bn_att2(self.att_conv(x)))
-        self.att = self.sigmoid(self.bn_att3(self.att_conv3(ax)))
+        ax1 = self.bn_att3(self.att_conv3(ax))
+        ax2 = self.laynorm(ax1)
+        self.att = self.sigmoid(ax2)
         ax = self.att_conv2(ax)
         ax = self.att_gap(ax)
         ax = ax.view(ax.size(0), -1)
@@ -520,12 +532,14 @@ class VGG_interpretable(nn.Module):
         self.num_classes = num_classes
         self.base_model = nn.Sequential(*list(models.vgg16(pretrained=True).features.children())[:-1])
         M = self.base_model[-2].out_channels
-        #self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
+        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
         self.add_conv = nn.Conv2d(in_channels=M, out_channels=M,
                                   kernel_size=3, stride=1, padding=1)
-        self.classifier = nn.Sequential(*list(models.vgg16(num_classes=self.num_classes).classifier.children()))
+        self.maxpool = nn.AdaptiveMaxPool2d(1)
+        self.fc = nn.Linear(512, num_classes)
+        #self.classifier = nn.Sequential(*list(models.vgg16(num_classes=self.num_classes).classifier.children()))
         # create templates for all filters
-        self.out_size = 14
+        self.out_size = 7
 
         mus = torch.FloatTensor([[i, j] for i in range(self.out_size) for j in range(self.out_size)])
         templates = torch.zeros(mus.size(0), self.out_size, self.out_size)
@@ -582,21 +596,23 @@ class VGG_interpretable(nn.Module):
 
     def forward(self, x, train=True):
         x = self.base_model(x)
-        #x = self.avgpool(x)
-        x1 = self.get_masked_output(x)
+        ax1 = self.avgpool(x)
+        x1 = self.get_masked_output(ax1)
         self.featuremap1 = x1.detach()
-        x = self.add_conv(x1.half())
-        x2 = self.get_masked_output(x)
-        x = x+x2
-        x = F.max_pool2d(x2, 2, 2)
+        #ax2 = self.add_conv(x1.half())
+        #x2 = self.get_masked_output(ax2)
+        x = x1
+        #x = F.max_pool2d(x2, 2, 2)
+        x = self.maxpool(x)
         x = x.view(x.size(0), -1)
-        x = self.classifier(x.half())
+        x = self.fc(x.half())
+        #x = self.classifier(x.half())
 
         # compute local loss:
         loss_1 = self.compute_local_loss(x1)
-        loss_2 = self.compute_local_loss(x2)
+        #loss_2 = self.compute_local_loss(x2)
 
-        return x, x1, loss_1,x2,loss_2
+        return x, x1, loss_1#, x2, loss_2
 
 class VGGNet(nn.Module):
     def __init__(self, num_classes=2):	   #num_classes，此处为 二分类值为2
